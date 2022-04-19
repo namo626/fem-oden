@@ -29,9 +29,11 @@ public:
 
   void computeXY();
   void computeJ();
-  void computeKF();
   void computeZE();
   void computePhi();
+  void precompute();
+
+  void computeKF();
   void assemble(MatrixXd &K, MatrixXd &F);
 
 private:
@@ -83,6 +85,7 @@ double DPHI[3][3][3];
 vector<int> dirichletNodes;  // list of nodes with specified essential BC
 int* ID; // converts global node number to equation number in global matrix
 vector<Element> elements;
+int neq;  // number of global equations = nodesCount - dirichlet nodes
 
 /* Load function */
 double f(double x, double y) {
@@ -142,6 +145,28 @@ void read_nodes() {
 
 /* Initialize list of boundary nodes */
 void init_dirichlet() {
+  int n = (int) sqrt(nodesCount);
+  // bottom
+  for (int i = 0; i <= n-1; i++) {
+    dirichletNodes.push_back(i);
+  }
+
+  // top
+  for (int i = nodesCount-n; i <= nodesCount-1; i++) {
+    dirichletNodes.push_back(i);
+  }
+
+  // left
+  for (int i = 0; i <= n-1; i++) {
+    dirichletNodes.push_back(i*n);
+  }
+
+  // right
+  for (int i = 0; i <= n-1; i++) {
+    dirichletNodes.push_back((i+1)*n-1);
+  }
+
+  neq = nodesCount - dirichletNodes.size();
 }
 
 
@@ -231,6 +256,13 @@ void Element::computePhi() {
   }
 }
 
+void Element::precompute() {
+  computeXY();
+  computeJ();
+  computeZE();
+  computePhi();
+}
+
 void Element::computeKF() {
   Ke.setZero();
   Fe.setZero();
@@ -273,6 +305,17 @@ void Element::assemble(MatrixXd &K, MatrixXd &F) {
   }
 }
 
+vector<double> assignNodes(MatrixXd &sol) {
+  vector<double> vals(nodesCount, 0);
+  for (int i = 0; i < nodesCount; i++) {
+    if (ID[i] == -1) {
+      vals[i] = 0;
+    } else {
+      vals[i] = sol(ID[i]);
+    }
+  }
+  return vals;
+}
 
 int main() {
   quadDegree = 3;
@@ -280,6 +323,10 @@ int main() {
 
   /* Global matrices */
   MatrixXd K, F;
+  K.resize(neq, neq);
+  F.resize(neq, 1);
+  K.setZero();
+  F.setZero();
 
   read_elems();
   for (auto e: elements) {
@@ -289,14 +336,11 @@ int main() {
   read_nodes();
   cout << "Number of nodes: " << nodesCount << endl;
 
-  // for (auto e: elements) {
-  //   e.computeXY();
-  //   e.computeJ();
-  //   e.computeKF();
-  //   e.computeZE();
-  //   e.computePhi();
-  //   e.assemble(K, F);
-  // }
+  for (auto e: elements) {
+    e.precompute();
+    e.computeKF();
+    e.assemble(K, F);
+  }
 
   // /* Solve the global equation */
   // MatrixXd sol = K.fullPivLu().solve(F);
