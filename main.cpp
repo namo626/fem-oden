@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <vector>
 #include <Eigen/Dense>
+#include <Eigen/Sparse>
 #include <string>
 #include <sstream>
 #include <fstream>
@@ -9,6 +10,9 @@
 
 using namespace std;
 using namespace Eigen;
+typedef Triplet<double> T;
+
+double* Q; // values at the essential BC, zero otherwise
 
 /* Gaussian integration points and weights on the ref. triangle */
 double GaussPoints[3][3] = {
@@ -31,12 +35,12 @@ public:
   void computeJ();
   void computeZE();
   void computePhi();
+  void initQ();
   void precompute();
 
   void computeKF();
-  void assemble(MatrixXd &K, MatrixXd &F);
+  void assemble(vector<T> &t, MatrixXd &F);
 
-private:
   /* Gaussian points in global coordinates */
   double XGP[3][3];
   double YGP[3][3];
@@ -54,6 +58,7 @@ private:
 
   MatrixXd Ke;
   MatrixXd Fe;
+  Vector3d Qe;
 
 };
 
@@ -65,6 +70,13 @@ Element::Element(int idd, vector<int> nnodes) {
   Fe.resize(3, 1);
   Ke.setZero();
   Fe.setZero();
+
+}
+
+void Element::initQ() {
+  for (int i = 0; i < 3; i++) {
+    Qe(i) = Q[nodes[i]];
+  }
 }
 
 ostream &operator<<(ostream &os, const Element &elem)
@@ -87,9 +99,14 @@ int* ID; // converts global node number to equation number in global matrix
 vector<Element> elements;
 int neq;  // number of global equations = nodesCount - dirichlet nodes
 
+/* Test solution */
+double ue(double x, double y) {
+  return 1 + pow(x,2) + 2*pow(y,2);
+}
+
 /* Load function */
 double f(double x, double y) {
-  return x+y;
+  return -6.0;
 }
 
 /* Initialize the vector of elements */
@@ -132,7 +149,7 @@ void read_nodes() {
         row.push_back(stof(word));
       }
       nodesX.push_back(row[0]);
-      nodesY.push_back(row[0]);
+      nodesY.push_back(row[1]);
 
       nodeID++;
     }
@@ -157,14 +174,15 @@ void init_dirichlet() {
   }
 
   // left
-  for (int i = 0; i <= n-1; i++) {
+  for (int i = 1; i <= n-2; i++) {
     dirichletNodes.push_back(i*n);
   }
 
   // right
-  for (int i = 0; i <= n-1; i++) {
+  for (int i = 1; i <= n-2; i++) {
     dirichletNodes.push_back((i+1)*n-1);
   }
+
 
   neq = nodesCount - dirichletNodes.size();
 }
@@ -173,12 +191,16 @@ void init_dirichlet() {
 /* Initialize ID array */
 void init_ID() {
   ID = new int[nodesCount];
+  Q = new double[nodesCount];
+
   int count = 0;
   for (int i = 0; i < nodesCount; i++) {
     if(find(dirichletNodes.begin(), dirichletNodes.end(), i) != dirichletNodes.end()) {
       ID[i] = -1;
+      Q[i] = ue(nodesX[i], nodesY[i]);
     } else {
       ID[i] = count;
+      Q[i] = 0;
       count++;
     }
   }
@@ -261,6 +283,7 @@ void Element::precompute() {
   computeJ();
   computeZE();
   computePhi();
+  initQ();
 }
 
 void Element::computeKF() {
@@ -281,10 +304,13 @@ void Element::computeKF() {
       Fe(i) += f(XGP[0][k], YGP[0][k])*DPHI[i][0][k]*J[k]*GaussWeights[k];
     }
   }
+
+  /* Add the essential BC */
+  Fe = Fe - Ke*Qe;
 }
 
 /* Assemble elemental matrices to global matrix via ID array */
-void Element::assemble(MatrixXd &K, MatrixXd &F) {
+void Element::assemble(vector<T> &t, MatrixXd &F) {
   int ii, jj;
 
   for (int i = 0; i < 3; i++) {
@@ -292,7 +318,8 @@ void Element::assemble(MatrixXd &K, MatrixXd &F) {
       ii = ID[nodes[i]];
       jj = ID[nodes[j]];
       if (ii != -1 && jj != -1) {
-        K(ii,jj) += Ke(i,j);
+        //K(ii,jj) += Ke(i,j);
+        t.push_back(Triplet<double>(ii, jj, Ke(i,j)));
       }
     }
   }
@@ -309,7 +336,7 @@ vector<double> assignNodes(MatrixXd &sol) {
   vector<double> vals(nodesCount, 0);
   for (int i = 0; i < nodesCount; i++) {
     if (ID[i] == -1) {
-      vals[i] = 0;
+      vals[i] = Q[i];
     } else {
       vals[i] = sol(ID[i]);
     }
@@ -317,33 +344,73 @@ vector<double> assignNodes(MatrixXd &sol) {
   return vals;
 }
 
-int main() {
-  quadDegree = 3;
-  init_dPhi();
+void write_solution(vector<double> &vals) {
+  ofstream outfile("output.csv");
+  cout << "Writing solution to output.csv" << endl;
 
-  /* Global matrices */
-  MatrixXd K, F;
-  K.resize(neq, neq);
-  F.resize(neq, 1);
-  K.setZero();
-  F.setZero();
-
-  read_elems();
-  for (auto e: elements) {
-    cout << e << endl;
+  for (int i = 0; i < nodesCount; i++) {
+    outfile << nodesX[i] << "," << nodesY[i] << "," << vals[i] << "\n";
   }
+}
+
+
+int main() {
+  read_elems();
+  // for (auto e: elements) {
+  //   cout << e << endl;
+  // }
 
   read_nodes();
+  init_dirichlet();
+  init_ID();
+  quadDegree = 3;
+  init_dPhi();
+  // for (int i = 0; i < 3; i++) {
+  //   for (int j = 0; j < 3; j++) {
+  //     printf("%.2f ", DPHI[i][j][2]);
+  //   }
+  //   printf("\n");
+  // }
+  /* Global matrices */
+  MatrixXd F;
+  SparseMatrix<double> K(neq, neq);
+  vector<T> t;
+  F.resize(neq, 1);
+  F.setZero();
+
+
   cout << "Number of nodes: " << nodesCount << endl;
+  cout << "Number of equations: " << neq << endl;
+
+  // cout << "Dirichlet nodes: " << endl;
+  // for (auto n: dirichletNodes) {
+  //   cout << n << " ";
+  // }
+  // printf("\n");
+
+  // cout << "ID array: " << endl;
+  // for (int i = 0; i < nodesCount; i++) {
+  //   printf("%d ", ID[i]);
+  // }
+  // printf("\n");
+
 
   for (auto e: elements) {
     e.precompute();
     e.computeKF();
-    e.assemble(K, F);
+    e.assemble(t, F);
   }
+  K.setFromTriplets(t.begin(), t.end());
+  cout << "Finished assembly" << endl;
 
-  // /* Solve the global equation */
-  // MatrixXd sol = K.fullPivLu().solve(F);
+
+  /* Solve the global equation */
+  SimplicialLDLT<SparseMatrix<double>> solver(K);
+  MatrixXd sol = solver.solve(F);
+  //MatrixXd sol = K.fullPivLu().solve(F);
+
+  vector<double> vals = assignNodes(sol);
+  write_solution(vals);
 
   return 0;
 }
