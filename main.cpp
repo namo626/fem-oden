@@ -43,7 +43,6 @@ int main() {
   MatrixXd F;
   SparseMatrix<double> K(neq, neq);
   K.reserve(VectorXi::Constant(neq,7));
-  vector<T> t;
   F.resize(neq, 1);
   F.setZero();
 
@@ -59,7 +58,6 @@ int main() {
     //e.assemble(t, F);
     e.assemble(K,F);
   }
-  K.setFromTriplets(t.begin(), t.end());
   cout << "Finished assembly" << endl;
   i2 = timeit();
   t1 = getTime(i1, i2);
