@@ -4,6 +4,8 @@
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
 #include <string>
+#include <ctime>
+#include "omp.h"
 
 #include "Global.h"
 #include "Element.h"
@@ -13,7 +15,25 @@ using namespace std;
 using namespace Eigen;
 typedef Triplet<double> T;
 
+double getTime(double i1, double i2) {
+  double t1 = (i2 - i1);
+  return t1;
+}
+
+/* Choosing between serial or parallel */
+double timeit() {
+#ifdef _OPENMP
+  return omp_get_wtime();
+#else
+  return (double) clock() / CLOCKS_PER_SEC ;
+#endif
+}
+
 int main() {
+  // timer vars
+  double i1, i2;
+  double t1, t2;
+
   initialize();
 
   vector<Element> elements;
@@ -22,27 +42,40 @@ int main() {
   /* Global matrices */
   MatrixXd F;
   SparseMatrix<double> K(neq, neq);
+  K.reserve(VectorXi::Constant(neq,7));
   vector<T> t;
   F.resize(neq, 1);
   F.setZero();
 
   cout << "Number of nodes: " << nodesCount << endl;
+  cout << "Number of elements: " << elements.size() << endl;
   cout << "Number of equations: " << neq << endl;
 
+  i1 = timeit();
+  #pragma omp parallel for
   for (auto e: elements) {
     e.precompute();
     e.computeKF();
-    e.assemble(t, F);
+    //e.assemble(t, F);
+    e.assemble(K,F);
   }
   K.setFromTriplets(t.begin(), t.end());
   cout << "Finished assembly" << endl;
+  i2 = timeit();
+  t1 = getTime(i1, i2);
 
   /* Solve the global equation */
+  i1 = timeit();
   SimplicialLDLT<SparseMatrix<double>> solver(K);
   MatrixXd sol = solver.solve(F);
+  i2 = timeit();
+  t2 = getTime(i1, i2);
 
   vector<double> vals = assignNodes(sol);
   write_solution(vals);
+
+  printf("Assembly: %.3f\n", t1);
+  printf("Solving : %.3f\n", t2);
 
   return 0;
 }

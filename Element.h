@@ -25,7 +25,8 @@ public:
   void precompute();
 
   void computeKF();
-  void assemble(std::vector<T> &t, Eigen::MatrixXd &F);
+  //void assemble(std::vector<T> &t, Eigen::MatrixXd &F);
+  void assemble(Eigen::SparseMatrix<double> &K, Eigen::MatrixXd &F);
 
   /* Gaussian points in global coordinates */
   double XGP[3][3];

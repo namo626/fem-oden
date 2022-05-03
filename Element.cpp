@@ -3,6 +3,7 @@
 #include <Eigen/Sparse>
 #include "Element.h"
 #include "Global.h"
+#include "omp.h"
 
 using namespace std;
 using namespace Eigen;
@@ -115,7 +116,7 @@ void Element::computeKF() {
 }
 
 /* Assemble elemental matrices to global matrix via ID array */
-void Element::assemble(vector<T> &t, MatrixXd &F) {
+void Element::assemble( SparseMatrix<double> &K, MatrixXd &F) {
   int ii, jj;
 
   for (int i = 0; i < 3; i++) {
@@ -124,7 +125,9 @@ void Element::assemble(vector<T> &t, MatrixXd &F) {
       jj = ID[nodes[j]];
       if (ii != -1 && jj != -1) {
         //K(ii,jj) += Ke(i,j);
-        t.push_back(Triplet<double>(ii, jj, Ke(i,j)));
+        //t.push_back(Triplet<double>(ii, jj, Ke(i,j)));
+        #pragma omp atomic
+        K.coeffRef(ii,jj) += Ke(i,j);
       }
     }
   }
@@ -132,6 +135,7 @@ void Element::assemble(vector<T> &t, MatrixXd &F) {
   for (int i = 0; i < 3; i++) {
     ii = ID[nodes[i]];
     if (ii != -1) {
+      #pragma omp atomic
       F(ii) += Fe(i);
     }
   }
