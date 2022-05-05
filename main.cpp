@@ -64,11 +64,16 @@ int main() {
 
   /* Solve the global equation */
   i1 = timeit();
-  SimplicialLDLT<SparseMatrix<double>> solver(K);
+  SimplicialLDLT<SparseMatrix<double> > solver(K);
+  //BiCGSTAB<SparseMatrix<double,RowMajor> > solver(K);
+  //LeastSquaresConjugateGradient<SparseMatrix<double>> solver;
+  //solver.compute(K);
+  //solver.setTolerance(1e-6);
   MatrixXd sol = solver.solve(F);
   i2 = timeit();
   t2 = getTime(i1, i2);
-
+  // cout << "#iterations:     " << solver.iterations() << endl;
+  // cout << "estimated error: " << solver.error()      << endl;
   vector<double> vals = assignNodes(sol);
   write_solution(vals);
 

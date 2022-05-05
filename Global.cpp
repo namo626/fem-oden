@@ -28,12 +28,54 @@ double GaussWeights[3] = {1./3, 1./3, 1./3};
 
 /* Test solution */
 double ue(double x, double y) {
-  return 1 + pow(x,2) + 2*pow(y,2);
+  //return 1 + pow(x,2) + 2*pow(y,2);
+  return exp(-(x*x/9. + y*y/9.));
 }
 
 /* Load function */
 double f(double x, double y) {
-  return -6.0;
+  //return -6.0;
+  return -(4/81.)*exp(-(x*x/9.+y*y/9.))*(-9 + x*x + y*y);
+}
+
+/* Parallel read */
+void read_nodes_par() {
+  MPI_File fh;
+  MPI_Status status;
+
+  int rank, nprocs;
+  int filesize, bufsize, nints;
+
+  double* buf;
+
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+  MPI_Comm_size(MPI_COMM_WORLD, &nprocs);
+
+  MPI_File_open(MPI_COMM_WORLD, "nodes.csv", MPI_MODE_RDONLY, MPI_INFO_NULL, &fh);
+  MPI_File_get_size(fh, &filesize);
+
+  total = filesize / sizeof(double);
+  numrows = total / 3;
+  rows_per_proc = floor((double)numrows / nprocs);
+
+  // last rank gets the remainder
+  if (rank == nprocs-1) {
+    rows_per_proc = total - (nprocs-1)*rows_per_proc;
+  }
+  bufsize = 3 * sizeof(double) * rows_per_proc;
+  nints   = bufsize/sizeof(double);
+  buf = new double[bufsize];
+
+  MPI_File_seek(fh, rank*bufsize, MPI_SEEK_SET);
+  MPI_File_read(fh, buf, nints, MPI_DOUBLE, &status);
+  MPI_File_close(&fh);
+
+  // convert the binary array to nodesX and nodesY
+  for (int i = 0; i < nints; i+=2) {
+    nodesX_local[i] = buf[i];
+    nodesY_local[i] = buf[i+1];
+  }
+
 }
 
 /* Initializes nodesCount, nodesX, nodesY */
