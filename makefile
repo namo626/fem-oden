@@ -1,5 +1,9 @@
 CC = mpicxx
-CFLAGS = -I/usr/include -I/usr/include/eigen3 -L/usr/lib
+ifeq ($(shell hostname), laura)
+  CFLAGS = -I/usr/include -I/workspace/eigen-3.4.0 -L/usr/lib
+else
+  CFLAGS = -I/usr/include -I/usr/include/eigen3 -L/usr/lib
+endif
 #OFLAG = -fopenmp
 
 main: main.cpp Element.o Global.o Post.o

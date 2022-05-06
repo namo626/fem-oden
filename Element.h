@@ -11,9 +11,9 @@ typedef Eigen::Triplet<double> T;
 
 class Element {
 public:
-  Element(int id, std::vector<int> nodes);
+  Element(std::vector<int> nodes);
   // Id
-  int id;
+  //int id;
   // List of nodes in counterclockwise direction
   std::vector<int> nodes;
 
@@ -50,3 +50,5 @@ public:
 };
 
 void read_elems(std::vector<Element> &elements);
+std::vector<Element> read_elems_par(char* filename);
+std::ostream &operator<<(std::ostream &os, const Element &elem);

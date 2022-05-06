@@ -4,14 +4,15 @@
 #include "Element.h"
 #include "Global.h"
 #include "omp.h"
+#include <mpi.h>
 
 using namespace std;
 using namespace Eigen;
 typedef Triplet<double> T;
 
 /* Constructor for element class */
-Element::Element(int idd, vector<int> nnodes) {
-  id = idd;
+Element::Element(vector<int> nnodes) {
+  //id = idd;
   nodes = nnodes;
   Ke.resize(3, 3);
   Fe.resize(3, 1);
@@ -28,7 +29,7 @@ void Element::initQ() {
 
 ostream &operator<<(ostream &os, const Element &elem)
 {
-  os << "ID: " << elem.id << endl;
+  //os << "ID: " << elem.id << endl;
   for (auto e: elem.nodes) {
     os << e << " ";
   }
@@ -156,11 +157,71 @@ void read_elems(vector<Element> &elements) {
       while(getline(str, word, ',')) {
         row.push_back(stoi(word));
       }
-      elements.push_back(Element(elem, row));
+      elements.push_back(Element(row));
       elem++;
     }
   } else {
     cout << "File doesn't exist" << endl;
   }
+
+}
+
+/* MPI IO for parallel reading of the element list */
+vector<Element> read_elems_par(char* filename) {
+  MPI_File fh;
+  MPI_Status status;
+
+  int rank, nprocs;
+  int bufsize, nints, total, numrows;
+  MPI_Offset filesize;
+
+  int* buf;
+  int rows_per_proc, elems_per_proc, remainder, offset;
+
+  // amount of entries per row
+  int datum = 3;
+
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+  MPI_Comm_size(MPI_COMM_WORLD, &nprocs);
+
+  MPI_File_open(MPI_COMM_WORLD, filename, MPI_MODE_RDONLY, MPI_INFO_NULL, &fh);
+  MPI_File_get_size(fh, &filesize);
+
+  total = filesize / sizeof(int);
+  numrows = total / datum;
+  rows_per_proc = numrows / nprocs; //floor division
+
+  // if (rank == 0) {
+  //   printf("Total data = %d\n", total);
+  //   printf("Numrows = %d\n", numrows);
+  // }
+
+  // last rank gets the remainder
+  remainder = numrows - (nprocs-1)*rows_per_proc;
+  if (rank == nprocs-1) {
+    elems_per_proc = remainder;
+  } else {
+    elems_per_proc = rows_per_proc;
+  }
+
+  bufsize = datum * sizeof(int) * elems_per_proc;
+  nints   = bufsize/sizeof(int);
+  buf = new int[nints];
+
+  offset = datum * sizeof(int) * rows_per_proc;
+
+  MPI_File_seek(fh, rank*offset, MPI_SEEK_SET);
+  MPI_File_read(fh, buf, nints, MPI_INT, &status);
+  MPI_File_close(&fh);
+
+  // Now initialize the elements
+  vector<int> nnodes(3);
+  vector<Element> elems;
+
+  for (int i = 0; i < elems_per_proc; i++) {
+    nnodes = {buf[datum*i], buf[datum*i+1], buf[datum*i+2]};
+    elems.push_back(Element(nnodes));
+  }
+  return elems;
 
 }

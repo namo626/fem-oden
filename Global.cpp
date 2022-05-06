@@ -85,10 +85,6 @@ void read_nodes_par() {
     nodes_per_proc = rows_per_proc;
   }
 
-  if (rank == 0) {
-    printf("rows_per_proc = %d\n", rows_per_proc);
-    printf("remainder = %d\n", remainder);
-  }
   bufsize = 2 * sizeof(double) * nodes_per_proc;
   nints   = bufsize/sizeof(double);
   buf = new double[nints];
@@ -143,29 +139,42 @@ void read_nodes_par() {
 
 /* Initializes nodesCount, nodesX, nodesY */
 void read_nodes() {
+  int rank, nprocs;
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+  MPI_Comm_size(MPI_COMM_WORLD, &nprocs);
+
   int nodeID = 0;
-  vector<double> row;
-  string line, word;
-  fstream file("nodes.csv", ios::in);
+  if (rank == 0) {
+    vector<double> row;
+    string line, word;
+    fstream file("nodes.csv", ios::in);
 
-  if (file.is_open()) {
-    while(getline(file, line)) {
-      row.clear();
-      stringstream str(line);
+    if (file.is_open()) {
+      while(getline(file, line)) {
+        row.clear();
+        stringstream str(line);
 
-      while(getline(str, word, ',')) {
-        row.push_back(stof(word));
+        while(getline(str, word, ',')) {
+          row.push_back(stof(word));
+        }
+        nodesX.push_back(row[0]);
+        nodesY.push_back(row[1]);
+
+        nodeID++;
       }
-      nodesX.push_back(row[0]);
-      nodesY.push_back(row[1]);
-
-      nodeID++;
+    } else {
+      cout << "File doesn't exist" << endl;
     }
-  } else {
-    cout << "File doesn't exist" << endl;
-  }
 
+  }
+  // ensure size is correct before broadcasting
   nodesCount = nodeID;
+  MPI_Bcast(&nodesCount, 1, MPI_INT, 0, MPI_COMM_WORLD);
+
+  nodesX.resize(nodesCount);
+  nodesY.resize(nodesCount);
+  MPI_Bcast(&nodesX[0], nodesCount, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+  MPI_Bcast(&nodesY[0], nodesCount, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 }
 
 /* Initialize list of boundary nodes */

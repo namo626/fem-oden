@@ -44,18 +44,39 @@ int main() {
   double t1, t2;
 
   i1 = MPI_Wtime();
-  read_nodes_par();
-  i2 = MPI_Wtime();
+  initialize();
+  //i2 = MPI_Wtime();
 
-  if (rank == 0) {
-    printf("%.3f\n", i2-i1);
-  }
-  // if (rank == 3) {
+  // if (rank == 0) {
+  //   printf("Initialization: %.3f\n", i2-i1);
+  // }
+  // if (rank == 1) {
   //   for (int i = 0; i < nodesCount; i++) {
   //     printf("%d, %.1f\n", i, nodesX[i]);
   //   }
   // }
-  cout << "FInished reading" << endl;
+
+  //i1 = MPI_Wtime();
+  vector<Element> elements;
+  elements = read_elems_par("mesh");
+  for (auto e: elements) {
+    e.precompute();
+    e.computeKF();
+  }
+  i2 = MPI_Wtime();
+  if (rank == 0) {
+    //printf("Elements calculation: %.3f\n", i2-i1);
+    // for (auto e : elements) {
+    //   cout << e << endl;
+    // }
+  }
+
+  if (rank == 0) {
+    cout << "Number of nodes: " << nodesCount << endl;
+    cout << "Number of elements: " << elements.size() << endl;
+    cout << "Number of equations: " << neq << endl;
+    cout << "Total time: " << i2-i1 << endl;
+  }
   // initialize();
 
   MPI_Finalize();
