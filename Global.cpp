@@ -6,6 +6,7 @@
 #include "Global.h"
 #include <math.h>
 #include <algorithm>
+#include <mpi.h>
 
 using namespace std;
 int nodesCount;
@@ -44,38 +45,100 @@ void read_nodes_par() {
   MPI_Status status;
 
   int rank, nprocs;
-  int filesize, bufsize, nints;
+  int bufsize, nints, total, numrows;
+  MPI_Offset filesize;
 
   double* buf;
+  double* nodesX_local;
+  double* nodesY_local;
+  int* counts;
+  int* disp;
+
+  int rows_per_proc, nodes_per_proc, remainder, offset;
 
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   MPI_Comm_size(MPI_COMM_WORLD, &nprocs);
 
-  MPI_File_open(MPI_COMM_WORLD, "nodes.csv", MPI_MODE_RDONLY, MPI_INFO_NULL, &fh);
+  counts = new int[nprocs];
+  disp = new int[nprocs];
+
+  MPI_File_open(MPI_COMM_WORLD, "nodes", MPI_MODE_RDONLY, MPI_INFO_NULL, &fh);
   MPI_File_get_size(fh, &filesize);
 
   total = filesize / sizeof(double);
-  numrows = total / 3;
+  numrows = total / 2;
   rows_per_proc = floor((double)numrows / nprocs);
 
-  // last rank gets the remainder
-  if (rank == nprocs-1) {
-    rows_per_proc = total - (nprocs-1)*rows_per_proc;
+  if (rank == 0) {
+    printf("Total data = %d\n", total);
+    printf("Numrows = %d\n", numrows);
   }
-  bufsize = 3 * sizeof(double) * rows_per_proc;
-  nints   = bufsize/sizeof(double);
-  buf = new double[bufsize];
+  nodesCount = numrows;
+  nodesX.resize(nodesCount);
+  nodesY.resize(nodesCount);
 
-  MPI_File_seek(fh, rank*bufsize, MPI_SEEK_SET);
+  // last rank gets the remainder
+  remainder = numrows - (nprocs-1)*rows_per_proc;
+  if (rank == nprocs-1) {
+    nodes_per_proc = remainder;
+  } else {
+    nodes_per_proc = rows_per_proc;
+  }
+
+  if (rank == 0) {
+    printf("rows_per_proc = %d\n", rows_per_proc);
+    printf("remainder = %d\n", remainder);
+  }
+  bufsize = 2 * sizeof(double) * nodes_per_proc;
+  nints   = bufsize/sizeof(double);
+  buf = new double[nints];
+
+  offset = 2 * sizeof(double) * rows_per_proc;
+
+  MPI_File_seek(fh, rank*offset, MPI_SEEK_SET);
   MPI_File_read(fh, buf, nints, MPI_DOUBLE, &status);
   MPI_File_close(&fh);
 
+  nodesX_local = new double[nodes_per_proc];
+  nodesY_local = new double[nodes_per_proc];
+
+  if (rank == 0) {
+    printf("Finished initializing\n");
+  }
   // convert the binary array to nodesX and nodesY
-  for (int i = 0; i < nints; i+=2) {
-    nodesX_local[i] = buf[i];
-    nodesY_local[i] = buf[i+1];
+  for (int i = 0; i < nodes_per_proc; i++) {
+    nodesX_local[i] = buf[2*i];
+    nodesY_local[i] = buf[2*i+1];
   }
 
+  // if (rank == 1) {
+  //   //printf("Finished allocating local arrays\n");
+  //   for (int i = 0; i < nodes_per_proc; i++) {
+  //     printf("%.1f\n", nodesX_local[i]);
+  //     //printf("%.1f\n", buf[i]);
+  //   }
+  // }
+  // fill the count array for each rank
+  for (int i = 0; i < nprocs; i++) {
+    counts[i] = rows_per_proc;
+    disp[i] = i * rows_per_proc;
+  }
+  counts[nprocs-1] = remainder;
+
+  // if (rank == 0) {
+  //   for (int i = 0; i < nprocs; i++) {
+  //     cout << disp[i] << endl;
+  //   }
+  // }
+  // gather all the local nodelists from other ranks
+  MPI_Allgatherv(nodesX_local, nodes_per_proc, MPI_DOUBLE, &nodesX[0], counts, disp, MPI_DOUBLE, MPI_COMM_WORLD);
+  MPI_Allgatherv(nodesY_local, nodes_per_proc, MPI_DOUBLE, &nodesY[0], counts, disp, MPI_DOUBLE, MPI_COMM_WORLD);
+
+  delete [] nodesX_local;
+  delete [] nodesY_local;
+  delete [] buf;
+  delete []  counts;
+  delete [] disp;
 }
 
 /* Initializes nodesCount, nodesX, nodesY */

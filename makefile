@@ -1,6 +1,6 @@
-CC = g++
+CC = mpicxx
 CFLAGS = -I/usr/include -I/usr/include/eigen3 -L/usr/lib
-OFLAG = -fopenmp
+#OFLAG = -fopenmp
 
 main: main.cpp Element.o Global.o Post.o
 	$(CC) -o $@ $^ $(CFLAGS) $(OFLAG)

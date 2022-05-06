@@ -19,6 +19,7 @@ extern double GaussWeights[3];
 double ue(double x, double y);
 double f(double x, double y);
 void read_nodes();
+void read_nodes_par();
 void init_dirichlet();
 void init_ID();
 void init_dPhi();
