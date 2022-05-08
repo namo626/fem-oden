@@ -6,7 +6,8 @@
 #include "Global.h"
 #include <math.h>
 #include <algorithm>
-#include <mpi.h>
+//#include <mpi.h>
+#include <petscksp.h>
 
 using namespace std;
 int nodesCount;

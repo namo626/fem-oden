@@ -6,7 +6,8 @@
 #include <string>
 #include <ctime>
 #include "omp.h"
-#include <mpi.h>
+//#include <mpi.h>
+#include <petscksp.h>
 
 #include "Global.h"
 #include "Element.h"
@@ -30,9 +31,12 @@ double timeit() {
 #endif
 }
 
-int main() {
+int main(int argc,char **args) {
 
-  MPI_Init(NULL, NULL);
+  char help[] = "help";
+
+  PetscInitialize(&argc,&args,(char*)0,help);
+  //MPI_Init(NULL, NULL);
 
   int rank;
 
@@ -45,31 +49,36 @@ int main() {
 
   i1 = MPI_Wtime();
   initialize();
-  //i2 = MPI_Wtime();
 
-  // if (rank == 0) {
-  //   printf("Initialization: %.3f\n", i2-i1);
-  // }
-  // if (rank == 1) {
-  //   for (int i = 0; i < nodesCount; i++) {
-  //     printf("%d, %.1f\n", i, nodesX[i]);
-  //   }
-  // }
-
-  //i1 = MPI_Wtime();
   vector<Element> elements;
-  elements = read_elems_par("mesh");
-  for (auto e: elements) {
-    e.precompute();
-    e.computeKF();
-  }
+  elements = read_elems_par((char*)"mesh");
+  // for (auto e: elements) {
+  //   e.precompute();
+  //   e.computeKF();
+  // }
   i2 = MPI_Wtime();
-  if (rank == 0) {
-    //printf("Elements calculation: %.3f\n", i2-i1);
-    // for (auto e : elements) {
-    //   cout << e << endl;
-    // }
+
+
+  for (int i = 0; i < elements.size(); i++) {
+    elements[i].precompute();
+    elements[i].computeKF();
   }
+  Element e = elements[2];
+  // e.precompute();
+  // if (rank == 1) {
+  //   //cout << elements[2].Fe << endl;
+  //   //cout << elements[2].J[1] << endl;
+  //   //cout << DPHI[1][1][1] << endl;
+  //   for (int i = 0; i < 3; i++) {
+  //     for (int j = 0; j < 3; j++) {
+  //       printf("%.2f ", e.YGP[i][j]);
+  //     }
+  //   }
+  //   cout << endl;
+
+  //   cout << e.Ke << endl;
+  //   cout << e.Fe << endl;
+  // }
 
   if (rank == 0) {
     cout << "Number of nodes: " << nodesCount << endl;
@@ -77,9 +86,83 @@ int main() {
     cout << "Number of equations: " << neq << endl;
     cout << "Total time: " << i2-i1 << endl;
   }
-  // initialize();
 
-  MPI_Finalize();
+  i1 = MPI_Wtime();
+  /* Create and assemble the global matrices in PETSC */
+  Vec F;
+  VecCreateMPI(MPI_COMM_WORLD, PETSC_DECIDE, neq, &F);
+  VecSet(F, 0.);
+
+  Mat K;
+  MatCreateAIJ(MPI_COMM_WORLD,PETSC_DECIDE,PETSC_DECIDE, neq, neq, 7, NULL, 7, NULL, &K);
+  //MatCreate(MPI_COMM_WORLD, &K);
+  // MatCreateDense(MPI_COMM_WORLD, PETSC_DECIDE, PETSC_DECIDE, neq,neq, NULL, &K);
+  MatZeroEntries(K);
+
+  // for (auto e: elements) {
+  //   e.assemble(K, F);
+  // }
+
+  //MatView(K, PETSC_VIEWER_STDOUT_WORLD);
+  for (int i = 0; i < elements.size(); i++) {
+    elements[i].assemble(K,F);
+  }
+
+
+  VecAssemblyBegin(F);
+  MatAssemblyBegin(K,MAT_FINAL_ASSEMBLY);
+
+  VecAssemblyEnd(F);
+  MatAssemblyEnd(K,MAT_FINAL_ASSEMBLY);
+
+  i2 = MPI_Wtime();
+  if (rank == 0) {
+    cout << "K and F time: " << i2 - i1 << endl;
+  }
+  // debug
+  //VecView(F, PETSC_VIEWER_STDOUT_WORLD);
+  //MatView(K, PETSC_VIEWER_STDOUT_WORLD);
+
+  /* Solve the system */
+  i1 = MPI_Wtime();
+  Vec x;
+  VecCreateMPI(MPI_COMM_WORLD, PETSC_DECIDE, neq, &x);
+
+  KSP ksp;
+  KSPCreate(MPI_COMM_WORLD, &ksp);
+  KSPSetOperators(ksp, K, K);
+  KSPSetFromOptions(ksp);
+  KSPSolve(ksp,F,x);
+  i2 = MPI_Wtime();
+
+  if (rank == 0) {
+    cout << "Solving time: " << i2 - i1 << endl;
+  }
+
+  /* Write solution locally, then gather and write to file */
+
+  Vec vout;
+  VecScatter ctx;
+  double* sol;
+  VecScatterCreateToZero(x,&ctx,&vout);
+  VecScatterBegin(ctx,x,vout,INSERT_VALUES,SCATTER_FORWARD);
+  VecScatterEnd(ctx,x,vout,INSERT_VALUES,SCATTER_FORWARD);
+
+  if (rank == 0) {
+    VecGetArray(vout, &sol);
+    vector<double> vals = assignNodes(sol);
+    write_solution(vals);
+  }
+
+  // PetscViewer viewer;
+  // PetscViewerASCIIOpen(MPI_COMM_WORLD, (char*)"output.txt", &viewer);
+  // for (int i = 0; i < nodesCount; i++) {
+  //   PetscViewerASCIIPrintf(viewer,"%.3f %.3f %.3f", nodesX[i], nodesY[i], sol[i]);
+  // }
+
+
+
+  PetscFinalize();
   // vector<Element> elements;
   // read_elems(elements);
 

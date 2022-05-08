@@ -3,8 +3,9 @@
 #include <Eigen/Sparse>
 #include "Element.h"
 #include "Global.h"
-#include "omp.h"
-#include <mpi.h>
+//#include "omp.h"
+//#include <mpi.h>
+#include <petscksp.h>
 
 using namespace std;
 using namespace Eigen;
@@ -30,8 +31,14 @@ void Element::initQ() {
 ostream &operator<<(ostream &os, const Element &elem)
 {
   //os << "ID: " << elem.id << endl;
+  os << "Nodes: " << endl;
   for (auto e: elem.nodes) {
     os << e << " ";
+  }
+  os << endl;
+  os << "NodesX: " << endl;
+  for (auto e: elem.nodes) {
+    os << nodesX[e] << " ";
   }
   os << endl;
   return os;
@@ -40,6 +47,7 @@ ostream &operator<<(ostream &os, const Element &elem)
 /* Calculate K and F matrices for each element */
 void Element::computeXY() {
 
+  double x, y;
   /* For each of x, dx/dzeta, dx/deta */
   for (int i = 0; i < 3; i++) {
     /* For each quadrature point */
@@ -48,12 +56,13 @@ void Element::computeXY() {
       XGP[i][j] = 0;
       YGP[i][j] = 0;
       for (int k = 0; k < 3; k++) {
-        double x = nodesX[nodes[k]];
-        double y = nodesY[nodes[k]];
+        x = nodesX[nodes[k]];
+        y = nodesY[nodes[k]];
         XGP[i][j] += x * DPHI[k][i][j];
         YGP[i][j] += y * DPHI[k][i][j];
       }
     }
+    //printf("x = %.2f\n", x);
   }
 
 }
@@ -117,8 +126,14 @@ void Element::computeKF() {
 }
 
 /* Assemble elemental matrices to global matrix via ID array */
-void Element::assemble( SparseMatrix<double> &K, MatrixXd &F) {
+void Element::assemble(Mat &K, Vec &F) {
   int ii, jj;
+
+  vector<int> idxm;
+  vector<int> idxn;
+  vector<double> values;
+  vector<int> inds;
+  vector<double> fvals;
 
   for (int i = 0; i < 3; i++) {
     for (int j = 0; j < 3; j++) {
@@ -127,19 +142,29 @@ void Element::assemble( SparseMatrix<double> &K, MatrixXd &F) {
       if (ii != -1 && jj != -1) {
         //K(ii,jj) += Ke(i,j);
         //t.push_back(Triplet<double>(ii, jj, Ke(i,j)));
-        #pragma omp atomic
-        K.coeffRef(ii,jj) += Ke(i,j);
+        //#pragma omp atomic
+        //K.coeffRef(ii,jj) += Ke(i,j);
+        // idxm.push_back(ii);
+        // idxn.push_back(jj);
+        // values.push_back(Ke(i,j));
+        MatSetValues(K, 1, &ii, 1, &jj, &Ke(i,j), ADD_VALUES);
       }
     }
   }
-
+  // for (int i = 0; i < values.size(); i++) {
+  //   cout << idxm[i] << endl;
+  // }
+  //cout << idxm.size() << " " << idxn.size() << " " << values.size() << endl;
   for (int i = 0; i < 3; i++) {
     ii = ID[nodes[i]];
     if (ii != -1) {
-      #pragma omp atomic
-      F(ii) += Fe(i);
+      //F(ii) += Fe(i);
+      // inds.push_back(ii);
+      // fvals.push_back(Fe(i));
+      VecSetValues(F, 1, &ii, &Fe(i), ADD_VALUES);
     }
   }
+  //printf("inds.size() = %d\n", inds.size());
 }
 
 /* Initialize the vector of elements */

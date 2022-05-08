@@ -2,7 +2,7 @@ CC = mpicxx
 ifeq ($(shell hostname), laura)
   CFLAGS = -I/usr/include -I/workspace/eigen-3.4.0 -L/usr/lib
 else
-  CFLAGS = -I/usr/include -I/usr/include/eigen3 -L/usr/lib
+  CFLAGS = -I/usr/include -I/usr/include/eigen3 -L/usr/lib -I${PETSC_DIR}/include -I${PETSC_ARCH}/include -L${PETSC_ARCH}/lib -lpetsc
 endif
 #OFLAG = -fopenmp
 
