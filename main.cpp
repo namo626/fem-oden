@@ -59,10 +59,6 @@ int main(int argc,char **args) {
   i2 = MPI_Wtime();
 
 
-  for (int i = 0; i < elements.size(); i++) {
-    elements[i].precompute();
-    elements[i].computeKF();
-  }
   Element e = elements[2];
   // e.precompute();
   // if (rank == 1) {
@@ -84,10 +80,8 @@ int main(int argc,char **args) {
     cout << "Number of nodes: " << nodesCount << endl;
     cout << "Number of elements: " << elements.size() << endl;
     cout << "Number of equations: " << neq << endl;
-    cout << "Total time: " << i2-i1 << endl;
   }
 
-  i1 = MPI_Wtime();
   /* Create and assemble the global matrices in PETSC */
   Vec F;
   VecCreateMPI(MPI_COMM_WORLD, PETSC_DECIDE, neq, &F);
@@ -104,7 +98,10 @@ int main(int argc,char **args) {
   // }
 
   //MatView(K, PETSC_VIEWER_STDOUT_WORLD);
+  //i1 = MPI_Wtime();
   for (int i = 0; i < elements.size(); i++) {
+    elements[i].precompute();
+    elements[i].computeKF();
     elements[i].assemble(K,F);
   }
 
@@ -117,7 +114,7 @@ int main(int argc,char **args) {
 
   i2 = MPI_Wtime();
   if (rank == 0) {
-    cout << "K and F time: " << i2 - i1 << endl;
+    cout << "Total time: " << i2-i1 << endl;
   }
   // debug
   //VecView(F, PETSC_VIEWER_STDOUT_WORLD);

@@ -1,0 +1,146 @@
+\documentclass[12pt]{extreport}
+\usepackage{amsmath}
+\usepackage{eufrak}
+\usepackage[mathscr]{euscript}
+\usepackage{mathtools}
+\usepackage{graphicx}
+\usepackage[margin=1.2in]{geometry}
+\usepackage{libertine}
+\usepackage{setspace}
+\usepackage{newtxmath}
+\usepackage[T1]{fontenc}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+
+\usepackage[skip=5pt plus1pt, indent=20pt]{parskip}
+
+\singlespacing
+
+\author{Chayanon Wichitrnithed}
+\title{Parallel 2D Finite Elements with OpenMP}
+
+\begin{document}
+\maketitle
+\section*{Introduction}
+Finite element methods has originally been used to solve problems in solid mechanics. However, recent uses and advancements in mathematical theory have made FEM applicable to many types of PDEs in general. This includes fluid dynamics like ADCIRC used to model storm surges from hurricanes.
+
+The main difference is that it approximates the solution space by simple basis functions. Consequently the formulation and implementation of the method are very different. In this report we outline the general structure of FEM implementation in two dimensions and specify where parallelization can be exploited.
+
+In this problem we are solving the Poisson equation with prescribed boundary values
+\begin{align}
+  - \Delta u &= f(x,y) \quad \text{on} \quad \Omega \\
+  u &= g(x,y) \quad \text{on} \quad \partial \Omega
+\end{align}
+where $g: \partial\Omega \rightarrow \mathbb{R}$ is a given function.
+
+\subsubsection*{Weak formulation}
+The equations above are in the so-called strong form of the PDE. To solve it using FEM we will convert it to the weak form as follows.
+
+Integrating (1) over the domain gives
+\begin{align}
+  -\int_\Omega v \Delta u = \int_\Omega v f
+\end{align}
+and using integration by parts (Green's identity) gives
+\begin{align}
+  \int_\Omega \nabla v \cdot \nabla u = \int_\Omega v f.
+\end{align}
+The weak formulation can now be stated:
+
+Find $u \in S$ such that (4) is satisfied for every $v \in V$.
+
+\subsection*{Galerkin method}
+The function spaces are infinite-dimensional, so we will have to approximate them with finite ones. That is, we can express the approximation as
+\begin{align}
+  u(x) \approx u_h(x) = \sum_i^d u_i \phi_i(x)
+\end{align}
+where $d$ is the number of basis functions, and each $\phi_i$ is an appropriate choice of basis function that is computationally convenient. If we substitute this representation into the weak form, we get a system of linear equations:
+\begin{align}
+  K\hat{u} = F
+\end{align}
+where
+\begin{align}
+  K_{ij} &= \int_\Omega (\phi_{j,x} \phi_{i,x} + \phi_{j,y} \phi_{i,y}) \\
+  F_i &= \int_\Omega f \phi_i \\
+  \hat{u}_i &= u_i.
+\end{align}
+Once we have solved for the coefficients $u_i$, we can use them to construct the approximate solution in (5).
+
+Thus we can lay out the main tasks required to use this method:
+\begin{enumerate}
+\item Read in the domain information. This includes the number of basis functions and their locations in the domain.
+\item Compute the components of the matrices $K$ and $F$. This involves numerically integrating the basis functions and their derivatives.
+\item Solve the linear system (6).
+\end{enumerate}
+Broadly speaking, the aim of this work is to parallelize steps 1 and 2. We will use an dedicated external library to parallelize step 3, since numerical linear algebra is a specialized field and it is beyond the scope of the author's knowledge. The implementation details are explained in the next section.
+
+\section*{Implementation}
+We use a square domain with triangular elements and linear basis functions. The discretized domain is shown in Figure 2. The program will accept 2 input data: a list of $x$ and $y$ coordinates for every node, and a list of nodes for each element.
+
+Each element is constructed as a C++ object with local data and methods to compute its local matrices and to assemble them into the global matrices. We use PetSC to handle matrix calculations using the same MPI communicator.
+
+\subsection*{Reading of Input Data}
+Since every processor has to be able to access the node list, we let rank 0 read in the node list and broadcast this information to the other ranks.
+\begin{algorithm}
+  \caption{Reading the node list}
+  \begin{algorithmic}
+    \Procedure{readNodes}{\textit{file}} \Comment{Output: Number of nodes, coordinate of each node}
+    \State \textit{nodesCount := 0}
+    \If{rank = 0}
+    \For{each line in file}
+    \State Read $x$ and $y$ coordinates
+    \State \textit{nodesCount++}
+    \EndFor
+    \EndIf
+    \State MPI\_Bcast \textit{nodesCount}
+    \State MPI\_Bcast the coordinate array
+    \EndProcedure
+  \end{algorithmic}
+\end{algorithm}
+
+Reading in the elements, however, can be done in parallel since each rank only needs its subset of all elements. We use MPI-IO to define an offset based on each rank to read the file in parallel, so each rank can retrieve its elements without communication.
+\begin{algorithm}
+  \caption{Reading the element list}
+  \begin{algorithmic}
+    \Procedure{readElems}{\textit{file}}
+    \State Initialize read buffer \textit{buf}
+    \State Determine \textit{offset} based on rank
+    \State MPI\_File\_Open \textit{file}
+    \State MPI\_Seek using \textit{offset}
+    \State MPI\_Read the portion of the element list into \textit{buf}
+    \State Construct the local list of Element objects from \textit{buf}
+    \EndProcedure
+  \end{algorithmic}
+\end{algorithm}
+
+\subsection*{Computing and assembling the matrices}
+Once each rank obtains its local list of elements, it can proceed to compute the local quantities independently. To assemble them into the global matrices, we use the special handle from PETSC to add them to a specific location. This is merely to mark the locations; the asynchronous message passing is done afterwards. This is analogous to MPI\_Waitall.
+
+\begin{algorithm}
+  \caption{Assembling the global matrices}
+  \begin{algorithmic}
+    \State VecCreateMPI(MPI\_COMM\_WORLD, \ldots, $F$)
+    \State MatCreateMPI(MPI\_COMM\_WORLD, \ldots, $K$) \\
+    \For{each element $e$ in the local element list}
+    \State $e$.computeKF()
+    \State $e$.assemble($K$, $F$)
+    \EndFor
+    \State VecAssemblyBegin($F$);
+    \State MatAssemblyBegin($K$,MAT\_FINAL\_ASSEMBLY);
+
+    \State VecAssemblyEnd($F$);
+    \State MatAssemblyEnd($K$,MAT\_FINAL\_ASSEMBLY);
+  \end{algorithmic}
+\end{algorithm}
+
+\subsection*{Solving the linear system}
+We let PETSC handle the solving of $Ku = F$ in parallel using the KSP package. The results are then written sequentially to a file. The format of the output is that each line contains the $x$ and $y$ coordinates, followed by the corresponding value $u_h(x,y)$.
+
+\section*{Results}
+The test problem is
+\begin{align}
+  -\Delta u(x,y) &= e^{-(x^2 + y^2)} \quad \text{on} \quad (-5,5) \times (-5,5) \\
+  u(x,y) &= xe^{-(x^2+y^2)} \quad \text{on the boundary}.
+\end{align}
+We plot some solutions below with different mesh resolutions.
+
+\end{document}
