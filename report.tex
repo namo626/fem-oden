@@ -33,7 +33,7 @@ In this problem we are solving the Poisson equation with prescribed boundary val
 \end{align}
 where $g: \partial\Omega \rightarrow \mathbb{R}$ is a given function.
 
-\subsubsection*{Weak formulation}
+\subsection*{Weak formulation}
 The equations above are in the so-called strong form of the PDE. To solve it using FEM we will convert it to the weak form as follows.
 
 Integrating (1) over the domain gives
@@ -46,7 +46,7 @@ and using integration by parts (Green's identity) gives
 \end{align}
 The weak formulation can now be stated:
 
-Find $u \in S$ such that (4) is satisfied for every $v \in V$.
+\textit{Find $u \in S$ such that (4) is satisfied for every $v \in V$.}
 
 \subsection*{Galerkin method}
 The function spaces are infinite-dimensional, so we will have to approximate them with finite ones. That is, we can express the approximation as
@@ -65,55 +65,65 @@ where
 \end{align}
 Once we have solved for the coefficients $u_i$, we can use them to construct the approximate solution in (5).
 
-Thus we can lay out the main tasks required to use this method:
+However, actual computation requires further steps. We break the integrals into sums of smaller integrals on each \textit{element} $\Omega^e$, in this case a triangle:
+\begin{align}
+  K_{ij} &= \sum_e K^e_{ij} = \sum_e \int_{\Omega^e} (\phi_{j,x} \phi_{i,x} + \phi_{j,y} \phi_{i,y}) \\
+  F_i &= \sum_e F^e_i = \sum_e \int_{\Omega^e} f \phi_i
+\end{align}
+Thus, the work on each component of $K$ and $F$ can be split among multiple elements. Morever, we avoid completely calculating the integrals on each unique $\Omega^e$ by performing a change of basis to a \textit{reference triangle} $\hat{\Omega}^e$, so the computations would only depend on each element's vertices.
+
+We can now lay down the main tasks required to use this method:
 \begin{enumerate}
-\item Read in the domain information. This includes the number of basis functions and their locations in the domain.
-\item Compute the components of the matrices $K$ and $F$. This involves numerically integrating the basis functions and their derivatives.
-\item Solve the linear system (6).
+\item Read in the domain information. This includes the number of basis functions (nodes), their locations in the domain, and the connectivity for each element.
+\item For each element $e$, compute its local information such as the change-of-basis map and quadrature values, and perform numerical integration to obtain the local matrices $K^e$ and $F^e$.
+\item Sum all the elemental contributions into the global matrices $K$ and $F$, and solve the resulting linear system.
 \end{enumerate}
-Broadly speaking, the aim of this work is to parallelize steps 1 and 2. We will use an dedicated external library to parallelize step 3, since numerical linear algebra is a specialized field and it is beyond the scope of the author's knowledge. The implementation details are explained in the next section.
+Broadly speaking, the aim of this work is to parallelize steps 1 and 2. We will use an dedicated external library PETSC to parallelize parts of step 3, since numerical linear algebra is a specialized field and it is beyond the scope of the author's knowledge. The implementation details are explained in the next section.
 
 \section*{Implementation}
-We use a square domain with triangular elements and linear basis functions. The discretized domain is shown in Figure 2. The program will accept 2 input data: a list of $x$ and $y$ coordinates for every node, and a list of nodes for each element.
+We use a square domain with triangular elements and linear basis functions, so each element has 3 nodes. The discretized domain is shown in Figure 2. The program will accept 2 input data: a list of $x$ and $y$ coordinates for every node, and a list of nodes for each element. Each line of each file can be viewed as $[x, y]$ and $[node1, node2, node3]$, respectively.
 
-Each element is constructed as a C++ object with local data and methods to compute its local matrices and to assemble them into the global matrices. We use PetSC to handle matrix calculations using the same MPI communicator.
+The most natural parallelization strategy is for the elements to be split among processors. Each element is constructed as a C++ object with local data and methods to compute its local matrices and to assemble them into the global matrices. Parallelization is done in MPI, and we use PetSC to handle global matrix calculations using the same MPI communicator as the other parts of the program.
 
 \subsection*{Reading of Input Data}
-Since every processor has to be able to access the node list, we let rank 0 read in the node list and broadcast this information to the other ranks.
+ Since every processor has to be able to access the node list, we let rank 0 read in the node list and broadcast this information to the other ranks.
 \begin{algorithm}
   \caption{Reading the node list}
   \begin{algorithmic}
     \Procedure{readNodes}{\textit{file}} \Comment{Output: Number of nodes, coordinate of each node}
     \State \textit{nodesCount := 0}
+    \State Initialize \textit{nodesCoords}[] vector
     \If{rank = 0}
-    \For{each line in file}
-    \State Read $x$ and $y$ coordinates
+    \For{each line in \textit{file}}
+    \State Read $x$ and $y$ coordinates into \textit{nodesCoords}[]
     \State \textit{nodesCount++}
     \EndFor
     \EndIf
     \State MPI\_Bcast \textit{nodesCount}
-    \State MPI\_Bcast the coordinate array
+    \State Resize \textit{nodesCoords}[] to be of size \textit{nodesCount}
+    \State MPI\_Bcast \textit{nodesCoords}[]
     \EndProcedure
   \end{algorithmic}
 \end{algorithm}
 
-Reading in the elements, however, can be done in parallel since each rank only needs its subset of all elements. We use MPI-IO to define an offset based on each rank to read the file in parallel, so each rank can retrieve its elements without communication.
+Reading in the elements, however, can be done in parallel since each rank only needs its local subset of all elements. We use MPI-IO to define an offset based on each rank to read the file in parallel, so each rank can retrieve its elements without having to communicate with other ranks.
 \begin{algorithm}
   \caption{Reading the element list}
   \begin{algorithmic}
     \Procedure{readElems}{\textit{file}}
+    \State Get \textit{numlines} from MPI\_File\_get\_size
     \State Initialize read buffer \textit{buf}
-    \State Determine \textit{offset} based on rank
+    \State \textit{offset} := \textit{sizeof(int)} * \textit{rank} * 3 * \textit{numlines} / number of ranks
     \State MPI\_File\_Open \textit{file}
     \State MPI\_Seek using \textit{offset}
-    \State MPI\_Read the portion of the element list into \textit{buf}
+    \State MPI\_Read the local element list into \textit{buf}
     \State Construct the local list of Element objects from \textit{buf}
     \EndProcedure
   \end{algorithmic}
 \end{algorithm}
 
 \subsection*{Computing and assembling the matrices}
-Once each rank obtains its local list of elements, it can proceed to compute the local quantities independently. To assemble them into the global matrices, we use the special handle from PETSC to add them to a specific location. This is merely to mark the locations; the asynchronous message passing is done afterwards. This is analogous to MPI\_Waitall.
+Once each rank obtains its local list of elements, it can proceed to compute the local quantities independently. We construct the global matrices $K$ and $F$ using PETSC collectives which store them in parallel across MPI\_COMM\_WORLD. Inside the assemble() method, we use the special handle MatSetValue() and VecSetValue() to mark the locations in the global matrices that the element will add to. We then start the communication using VecAssemblyBegin() and MatAssemblyBegin() which asynchronously transfer data to those marked locations. Similar to using asynchronous Isend/Irecv, we have to wait for the transfers to be completed before proceeding.
 
 \begin{algorithm}
   \caption{Assembling the global matrices}
@@ -121,7 +131,8 @@ Once each rank obtains its local list of elements, it can proceed to compute the
     \State VecCreateMPI(MPI\_COMM\_WORLD, \ldots, $F$)
     \State MatCreateMPI(MPI\_COMM\_WORLD, \ldots, $K$) \\
     \For{each element $e$ in the local element list}
-    \State $e$.computeKF()
+    \State $e$.precompute() \Comment{Compute the local basis functions}
+    \State $e$.computeKF() \Comment{Compute local matrices $K^e$ and $F^e$}
     \State $e$.assemble($K$, $F$)
     \EndFor
     \State VecAssemblyBegin($F$);
@@ -133,14 +144,27 @@ Once each rank obtains its local list of elements, it can proceed to compute the
 \end{algorithm}
 
 \subsection*{Solving the linear system}
-We let PETSC handle the solving of $Ku = F$ in parallel using the KSP package. The results are then written sequentially to a file. The format of the output is that each line contains the $x$ and $y$ coordinates, followed by the corresponding value $u_h(x,y)$.
+We let PETSC handle the solving the (sparse) system $K\hat{u} = F$ in parallel using the KSP solver package. The resulting solution vectors are then gathered into rank 0 and then written sequentially to a file. The format of the output is that each line contains the $x$ and $y$ coordinates, followed by the corresponding value $u_h(x,y)$.
 
 \section*{Results}
 The test problem is
 \begin{align}
-  -\Delta u(x,y) &= e^{-(x^2 + y^2)} \quad \text{on} \quad (-5,5) \times (-5,5) \\
-  u(x,y) &= xe^{-(x^2+y^2)} \quad \text{on the boundary}.
+  -\Delta u(x,y) &= e^{-(x^2/9 + y^2/9)} \quad \text{on} \quad (-5,5) \times (-5,5) \\
+  u(x,y) &= \frac{4}{81}e^{-(x^2/9+y^2/9)}(x^2 + y^2 - 9) \quad \text{on the boundary}.
 \end{align}
 We plot some solutions below with different mesh resolutions.
+
+\includegraphics[width=\textwidth]{plot1.png}
+
+\section*{Summary}
+
+\begin{thebibliography}{3}
+\bibitem{texbook}
+Becker, E. B., Carey, G. F., Oden, J. T. (1981) \emph{Finite Elements, Volume 1}, Prentice Hall.
+
+\bibitem{lamport94}
+Hughes, T. J. (1994) \emph{The Finite Element Method}, Prentice Hall.
+Wesley, Massachusetts, 2nd ed.
+\end{thebibliography}
 
 \end{document}
