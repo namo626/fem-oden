@@ -1,4 +1,4 @@
-\documentclass[12pt]{extreport}
+\documentclass[12pt,notitlepage]{extreport}
 \usepackage{amsmath}
 \usepackage{eufrak}
 \usepackage[mathscr]{euscript}
@@ -17,24 +17,28 @@
 \singlespacing
 
 \author{Chayanon Wichitrnithed}
-\title{Parallel 2D Finite Elements with OpenMP}
+\title{Parallel 2D Finite Elements with MPI}
 
 \begin{document}
 \maketitle
+
+\begin{abstract}
+  We parallelize a simple implementation of the finite element method using MPI and PETSc. The problem is a 2D Poisson equation with essential boundary conditions. The results are not great.
+\end{abstract}
 \section*{Introduction}
-Finite element methods has originally been used to solve problems in solid mechanics. However, recent uses and advancements in mathematical theory have made FEM applicable to many types of PDEs in general. This includes fluid dynamics like ADCIRC used to model storm surges from hurricanes.
+The finite element method (FEM) is a class of numerical methods for solving partial differential equations (PDE) which have originally been used to solve problems in engineering such as solid mechanics and structural analysis. However, advancements in its mathematical theory have made FEM widely applicable to many scientific areas such as electromagnetism and fluid dynamics. One major example is the widely used Advanced Circulation Model (ADCIRC) which simulates hurricane storm surges by solving hyperbolic PDEs using FEM.
 
-The main difference is that it approximates the solution space by simple basis functions. Consequently the formulation and implementation of the method are very different. In this report we outline the general structure of FEM implementation in two dimensions and specify where parallelization can be exploited.
+The main idea behind the method is that, instead of approximating with derivatives at points (as in finite difference methods), it approximates the whole solution by combining many simple \textit{basis functions} over the domain. Morever, the domain itself is divided into smaller parts called \textit{finite elements} to facilitate the computation of these functions. Consequently the formulation and implementation of the method are very different from traditional finite difference methods. In this work we will implement a simple FEM solver in two dimensions and measure the performance gained from parallelizing various parts of the program.
 
-In this problem we are solving the Poisson equation with prescribed boundary values
+For simplicity, the PDE we are solving will be the Poisson equation with prescribed boundary values (Dirichlet boundary condition)
 \begin{align}
   - \Delta u &= f(x,y) \quad \text{on} \quad \Omega \\
-  u &= g(x,y) \quad \text{on} \quad \partial \Omega
+  u &= g(x,y) \quad \text{on} \quad \partial \Omega,
 \end{align}
-where $g: \partial\Omega \rightarrow \mathbb{R}$ is a given function.
+where $f : \Omega \rightarrow \mathbb{R}$, $g: \partial\Omega \rightarrow \mathbb{R}$ are given functions.
 
 \subsection*{Weak formulation}
-The equations above are in the so-called strong form of the PDE. To solve it using FEM we will convert it to the weak form as follows.
+The equations above are called the \textit{strong form} of the PDE. To solve it using FEM we will convert them to the \textit{weak form} as follows.
 
 Integrating (1) over the domain gives
 \begin{align}
@@ -44,16 +48,26 @@ and using integration by parts (Green's identity) gives
 \begin{align}
   \int_\Omega \nabla v \cdot \nabla u = \int_\Omega v f.
 \end{align}
-The weak formulation can now be stated:
+Notice now that the second derivative constraint for $u$ has been relaxed. The weak formulation can now be stated:
 
-\textit{Find $u \in S$ such that (4) is satisfied for every $v \in V$.}
+\textit{Find $u \in S$ such that (4) is satisfied for every $v \in V$},
 
-\subsection*{Galerkin method}
-The function spaces are infinite-dimensional, so we will have to approximate them with finite ones. That is, we can express the approximation as
+\noindent where $S$ and $V$ are appropriate function spaces.
+
+\subsection*{Galerkin approximation}
+As it stands, the weak formulation above is exact. However, the function spaces can be infinite-dimensional, so we will have to approximate them with finite ones. That is, we can search for an approximate solution $u_h$ in a finite-dimensional vector space $V_h \subset V$ and write it as
 \begin{align}
-  u(x) \approx u_h(x) = \sum_i^d u_i \phi_i(x)
+  u(x) \approx u_h(x) = \sum_{i=1}^d u_i \phi_i(x)
 \end{align}
-where $d$ is the number of basis functions, and each $\phi_i$ is an appropriate choice of basis function that is computationally convenient. If we substitute this representation into the weak form, we get a system of linear equations:
+where $d$ is the dimension of $V_h$ and each $\phi_i$ is a basis function (vector) of $V_h$. In our 2D case, one such basis function is shown in Figure 2 below.
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.5\textwidth]{basis.png}
+
+  \caption{A ``pyramid'' basis function built from linear shape functions on triangular elements}
+  \label{fig:basis}
+\end{figure}
+If we substitute this representation into the weak form, we get a system of linear equations:
 \begin{align}
   K\hat{u} = F
 \end{align}
@@ -65,7 +79,7 @@ where
 \end{align}
 Once we have solved for the coefficients $u_i$, we can use them to construct the approximate solution in (5).
 
-However, actual computation requires further steps. We break the integrals into sums of smaller integrals on each \textit{element} $\Omega^e$, in this case a triangle:
+However, actual computation requires further steps. We break the integrals into sums of smaller integrals on each element $\Omega^e$:
 \begin{align}
   K_{ij} &= \sum_e K^e_{ij} = \sum_e \int_{\Omega^e} (\phi_{j,x} \phi_{i,x} + \phi_{j,y} \phi_{i,y}) \\
   F_i &= \sum_e F^e_i = \sum_e \int_{\Omega^e} f \phi_i
@@ -78,16 +92,22 @@ We can now lay down the main tasks required to use this method:
 \item For each element $e$, compute its local information such as the change-of-basis map and quadrature values, and perform numerical integration to obtain the local matrices $K^e$ and $F^e$.
 \item Sum all the elemental contributions into the global matrices $K$ and $F$, and solve the resulting linear system.
 \end{enumerate}
-Broadly speaking, the aim of this work is to parallelize steps 1 and 2. We will use an dedicated external library PETSC to parallelize parts of step 3, since numerical linear algebra is a specialized field and it is beyond the scope of the author's knowledge. The implementation details are explained in the next section.
+Specifically, we will parallelize steps 1 and 2. We will use a dedicated external library PETSc to parallelize parts of step 3, since numerical linear algebra is a very specialized field that requires significant domain knowledge. The implementation details are explained in the following section.
 
 \section*{Implementation}
-We use a square domain with triangular elements and linear basis functions, so each element has 3 nodes. The discretized domain is shown in Figure 2. The program will accept 2 input data: a list of $x$ and $y$ coordinates for every node, and a list of nodes for each element. Each line of each file can be viewed as $[x, y]$ and $[node1, node2, node3]$, respectively.
+We use a square domain with triangular elements and linear basis functions, so each element has 3 nodes. An example of the discretized domain is shown in Figure 3. The program will accept 2 input files: a list of $x$ and $y$ coordinates for every node, and a list of nodes for each element. Each line of each file can be viewed as $[x, y]$ and $[node1, node2, node3]$, respectively.
 
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.7\textwidth]{mesh.png}
+  \caption{A finite element mesh with 8 triangular elements per side}
+  \label{fig:mesh}
+\end{figure}
 The most natural parallelization strategy is for the elements to be split among processors. Each element is constructed as a C++ object with local data and methods to compute its local matrices and to assemble them into the global matrices. Parallelization is done in MPI, and we use PetSC to handle global matrix calculations using the same MPI communicator as the other parts of the program.
 
 \subsection*{Reading of Input Data}
  Since every processor has to be able to access the node list, we let rank 0 read in the node list and broadcast this information to the other ranks.
-\begin{algorithm}
+\begin{algorithm}[htp]
   \caption{Reading the node list}
   \begin{algorithmic}
     \Procedure{readNodes}{\textit{file}} \Comment{Output: Number of nodes, coordinate of each node}
@@ -107,7 +127,7 @@ The most natural parallelization strategy is for the elements to be split among 
 \end{algorithm}
 
 Reading in the elements, however, can be done in parallel since each rank only needs its local subset of all elements. We use MPI-IO to define an offset based on each rank to read the file in parallel, so each rank can retrieve its elements without having to communicate with other ranks.
-\begin{algorithm}
+\begin{algorithm}[htp]
   \caption{Reading the element list}
   \begin{algorithmic}
     \Procedure{readElems}{\textit{file}}
@@ -123,9 +143,30 @@ Reading in the elements, however, can be done in parallel since each rank only n
 \end{algorithm}
 
 \subsection*{Computing and assembling the matrices}
-Once each rank obtains its local list of elements, it can proceed to compute the local quantities independently. We construct the global matrices $K$ and $F$ using PETSC collectives which store them in parallel across MPI\_COMM\_WORLD. Inside the assemble() method, we use the special handle MatSetValue() and VecSetValue() to mark the locations in the global matrices that the element will add to. We then start the communication using VecAssemblyBegin() and MatAssemblyBegin() which asynchronously transfer data to those marked locations. Similar to using asynchronous Isend/Irecv, we have to wait for the transfers to be completed before proceeding.
+Once each rank obtains its local list of elements, it can proceed to compute the local quantities independently. We construct the global matrices $K$ and $F$ using PETSC collectives which store them in parallel across MPI\_COMM\_WORLD.
 
-\begin{algorithm}
+Inside the assemble() method, we use the special handle MatSetValue() and VecSetValue() to mark the locations in the global matrices that the element will add to. We then start the communication using VecAssemblyBegin() and MatAssemblyBegin() which asynchronously transfer data to those marked locations. Similar to using asynchronous Isend/Irecv, we have to wait for the transfers to be completed before proceeding.
+
+\begin{algorithm}[htp]
+  \caption{Assembly method of each element}
+  \begin{algorithmic}
+    \Procedure{Element.assemble}{$K$, $F$}
+    \For{each component $k$ in $K^e$}
+    \If{$k$ is not the prescribed boundary}
+    \State MatSetValues(\ldots, ADD\_VALUES) to the appropriate location in $K$
+    \EndIf
+    \EndFor
+
+    \For{each component $f$ in $F^e$}
+    \If{$k$ is not the prescribed boundary node}
+    \State VecSetValues(\ldots, ADD\_VALUES) to the appropriate location in $F$
+    \EndIf
+    \EndFor
+    \EndProcedure
+  \end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[htp]
   \caption{Assembling the global matrices}
   \begin{algorithmic}
     \State VecCreateMPI(MPI\_COMM\_WORLD, \ldots, $F$)
@@ -144,19 +185,44 @@ Once each rank obtains its local list of elements, it can proceed to compute the
 \end{algorithm}
 
 \subsection*{Solving the linear system}
-We let PETSC handle the solving the (sparse) system $K\hat{u} = F$ in parallel using the KSP solver package. The resulting solution vectors are then gathered into rank 0 and then written sequentially to a file. The format of the output is that each line contains the $x$ and $y$ coordinates, followed by the corresponding value $u_h(x,y)$.
+We let PETSc handle the solving the (sparse) system $K\hat{u} = F$ in parallel using the KSP solver package. The resulting solution vectors are then gathered into rank 0 and then written sequentially to a file. The format of the output is that each line contains the $x$ and $y$ coordinates, followed by the corresponding value $u_h(x,y)$.
 
 \section*{Results}
 The test problem is
 \begin{align}
-  -\Delta u(x,y) &= e^{-(x^2/9 + y^2/9)} \quad \text{on} \quad (-5,5) \times (-5,5) \\
-  u(x,y) &= \frac{4}{81}e^{-(x^2/9+y^2/9)}(x^2 + y^2 - 9) \quad \text{on the boundary}.
+  -\Delta u(x,y) &= \frac{4}{81}e^{-(x^2/9+y^2/9)}(x^2 + y^2 - 9) \quad \text{on} \quad (-5,5) \times (-5,5) \\
+  u(x,y) &= e^{-(x^2/9 + y^2/9)} \quad \text{on the boundary}.
 \end{align}
-We plot some solutions below with different mesh resolutions.
+The exact solution is
+\begin{align}
+  u(x,y) = e^{-(x^2/9 + y^2/9)}.
+\end{align}
+We plot a sample solution with a  16x16 mesh below in Figure \ref{fig:plot}.
 
-\includegraphics[width=\textwidth]{plot1.png}
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=\textwidth]{plot1.png}
+
+  \caption{FEM solution on a 16x16 mesh (left) and the exact solution (right)}
+  \label{fig:plot}
+\end{figure}
+Next we plot the parallel scaling of the program. We fix the mesh size to be 1024x1024 while increasing the number of processors from 2 to 32. The plots in Figure \ref{fig:speedup} show the speedup for different parallel sections of the program. In Figure 5 the overall speedup is shown.
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=\textwidth]{speedup.png}
+
+  \caption{Parallel speedup for different parts of the program. Dashed lines represent ideal speedup.}
+  \label{fig:speedup}
+\end{figure}
+
+The first thing to notice is that all parts see some speedup except for reading the node list. Indeed, there isn't really any ``parallelism'' in reading the node list because it merely reads in the list sequentially and broadcasts it to all the other ranks. As there are more processors, broadcasting takes more time and so the speedup is negative as shown here.
+
+Reading the element list, on the other hand, has close to linear speedup in the beginning then diminishes after 16 cores. This is a little surprising because there seems to be no apparent communication between the ranks that we explicitly code, but this could perhaps be attributed to IO issues in MPI-IO. Another surprising result is that the scaling in assembling the global matrices is quite good; it remains linear all the way and is close to the ideal speedup. We speculate this to two reasons. One, PETSc may be using a reduction-like operation when adding values to the global matrices, in which case the runtime is better than linear. Second, there may not be that many components from the ranks that overlap in the global matrices, in which case there is no race condition and the sequential work is reduced.
+
+For solving the linear system, we see dimishing speedup quite early. The KSP default solver appears to use the Block Jacobi method, but as mentioned, numerical linear algebra is beyond the scope of this work and will not be analyzed here.
 
 \section*{Summary}
+I spent too much time on this
 
 \begin{thebibliography}{3}
 \bibitem{texbook}
