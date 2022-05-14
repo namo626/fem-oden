@@ -23,7 +23,7 @@
 \maketitle
 
 \begin{abstract}
-  We parallelize a simple implementation of the finite element method using MPI and PETSc. The problem is a 2D Poisson equation with essential boundary conditions. The results are not great.
+  We code a parallel version of the standard Galerkin finite element method using MPI and PETSc. The test problem is a 2D Poisson equation with essential boundary conditions. We outline both the theory and implementation\footnote{https://github.com/namo626/fem-oden} of the method and detail how parallelism is added. In particular, we parallelize 1) reading of the input, 2) calculation of the global matrices, and 3) solving of the linear system (using PETSc). Timing measurements show that we gain significant speedup from 2) while the rest do not scale as well. This suggests that efforts should be put in the parallelization on 3) in order to achieve a good overall speedup in a more complex finite element program.
 \end{abstract}
 \section*{Introduction}
 The finite element method (FEM) is a class of numerical methods for solving partial differential equations (PDE) which have originally been used to solve problems in engineering such as solid mechanics and structural analysis. However, advancements in its mathematical theory have made FEM widely applicable to many scientific areas such as electromagnetism and fluid dynamics. One major example is the widely used Advanced Circulation Model (ADCIRC) which simulates hurricane storm surges by solving hyperbolic PDEs using FEM.
@@ -59,7 +59,7 @@ As it stands, the weak formulation above is exact. However, the function spaces 
 \begin{align}
   u(x) \approx u_h(x) = \sum_{i=1}^d u_i \phi_i(x)
 \end{align}
-where $d$ is the dimension of $V_h$ and each $\phi_i$ is a basis function (vector) of $V_h$. In our 2D case, one such basis function is shown in Figure 2 below.
+where $d$ is the dimension of $V_h$ and each $\phi_i$ is a basis function (vector) of $V_h$. In our 2D case, one such basis function is shown in Figure \ref{fig:basis} below.
 \begin{figure}[h]
   \centering
   \includegraphics[width=0.5\textwidth]{basis.png}
@@ -95,14 +95,14 @@ We can now lay down the main tasks required to use this method:
 Specifically, we will parallelize steps 1 and 2. We will use a dedicated external library PETSc to parallelize parts of step 3, since numerical linear algebra is a very specialized field that requires significant domain knowledge. The implementation details are explained in the following section.
 
 \section*{Implementation}
-We use a square domain with triangular elements and linear basis functions, so each element has 3 nodes. An example of the discretized domain is shown in Figure 3. The program will accept 2 input files: a list of $x$ and $y$ coordinates for every node, and a list of nodes for each element. Each line of each file can be viewed as $[x, y]$ and $[node1, node2, node3]$, respectively.
-
+We use a square domain with triangular elements and linear basis functions, so each element has 3 nodes. An example of the discretized domain is shown in Figure \ref{fig:mesh}. The program will accept 2 input files: a list of $x$ and $y$ coordinates for every node, and a list of nodes for each element. Each line of each file can be viewed as $[x, y]$ and $[node1, node2, node3]$, respectively.
 \begin{figure}[h]
   \centering
   \includegraphics[width=0.7\textwidth]{mesh.png}
   \caption{A finite element mesh with 8 triangular elements per side}
   \label{fig:mesh}
 \end{figure}
+
 The most natural parallelization strategy is for the elements to be split among processors. Each element is constructed as a C++ object with local data and methods to compute its local matrices and to assemble them into the global matrices. Parallelization is done in MPI, and we use PetSC to handle global matrix calculations using the same MPI communicator as the other parts of the program.
 
 \subsection*{Reading of Input Data}
@@ -206,7 +206,7 @@ We plot a sample solution with a  16x16 mesh below in Figure \ref{fig:plot}.
   \caption{FEM solution on a 16x16 mesh (left) and the exact solution (right)}
   \label{fig:plot}
 \end{figure}
-Next we plot the parallel scaling of the program. We fix the mesh size to be 1024x1024 while increasing the number of processors from 2 to 32. The plots in Figure \ref{fig:speedup} show the speedup for different parallel sections of the program. In Figure 5 the overall speedup is shown.
+Next we plot the parallel scaling of the program. We fix the mesh size to be 1024x1024 while increasing the number of processors from 2 to 32. The plots in Figure \ref{fig:speedup} show the speedup for different parallel sections of the program.
 \begin{figure}[h]
   \centering
   \includegraphics[width=\textwidth]{speedup.png}
@@ -222,14 +222,14 @@ Reading the element list, on the other hand, has close to linear speedup in the 
 For solving the linear system, we see dimishing speedup quite early. The KSP default solver appears to use the Block Jacobi method, but as mentioned, numerical linear algebra is beyond the scope of this work and will not be analyzed here.
 
 \section*{Summary}
-I spent too much time on this
+We have implemented a basic parallel finite element solver in MPI and tested the scaling on different parts of the program. While some speedup has been gained, the overall scaling diminishes quite quickly as more processors are used. The most significant speedup is gained from parallelizing the assembling of the global matrices, which appears close to linear and is maintained even at higher number of cores. This is significant because in a bigger finite element program, one adds more complexity to the element calculations such as higher-order basis functions, higher-order quadrature rules, or  even timestepping for time-dependent problems. Thus the assembly and linear system solving are the two that constitute a larger part of the program than input reading which is only done once. For a more complex FEM solver, then, the focus should be on optimizing the components of the global matrices and choosing the best linear solver that achives the best parallelism.
 
 \begin{thebibliography}{3}
 \bibitem{texbook}
 Becker, E. B., Carey, G. F., Oden, J. T. (1981) \emph{Finite Elements, Volume 1}, Prentice Hall.
 
 \bibitem{lamport94}
-Hughes, T. J. (1994) \emph{The Finite Element Method}, Prentice Hall.
+Hughes, T. J. (1994) \emph{The Finite Element Method: Linear Static and Dynamic Finite Element Analysis}, Prentice Hall.
 Wesley, Massachusetts, 2nd ed.
 \end{thebibliography}
 
